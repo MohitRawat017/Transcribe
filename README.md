@@ -1,55 +1,102 @@
-# YouTube Audio Fetcher
+# YouTube Audio & Transcript Fetcher
 
-A Python script that directly fetches audio from YouTube channels. Downloads audio-only files (MP3 format) for a specified range of videos from any YouTube channel.
+A toolkit for fetching audio and transcripts from YouTube channels. All scripts use CLI arguments — no hardcoding needed.
 
-## Quick Start
+## Setup
 
-1. **Install dependencies:**
-   ```bash
-   pip install yt-dlp
-   ```
+```bash
+pip install yt-dlp youtube-transcript-api openai-whisper torch pyyaml
+```
 
-2. **Configure the script:**
-   Edit `fetcher.py` and update these variables:
-   ```python
-   CHANNEL_URL = "https://www.youtube.com/@zackdfilms/videos"  # URL of the YouTube channel's videos page
-   START_VIDEO  = 1      # index of first video to fetch (1 = most recent)
-   END_VIDEO    = 10     # index of last video to fetch
-   OUTPUT_DIR   = "./audios"
-   ```
+Requires `ffmpeg` installed on your system for audio conversion.
 
-3. **Run the script:**
-   ```bash
-   python fetcher.py
-   ```
+## Scripts
 
-## Configuration for Different Channels
+### `transcribe.py` — Unified transcription (recommended)
 
-### To change the channel:
-Replace the `CHANNEL_URL` with any YouTube channel's videos page URL:
-- Format: `https://www.youtube.com/@username/videos`
-- Or: `https://www.youtube.com/channel/CHANNEL_ID/videos`
-- Or: `https://www.youtube.com/c/ChannelName/videos`
+Fetches transcripts using YouTube's API first, falls back to Whisper for videos without captions.
 
-### To change the video range:
-- `START_VIDEO = 1` → Starts from the most recent video
-- `END_VIDEO = 50` → Downloads up to the 50th most recent video
-- Example: `START_VIDEO = 5, END_VIDEO = 15` → Downloads videos 5 through 15 (most recent to older)
+```bash
+# Transcribe videos 1–20
+python transcribe.py https://www.youtube.com/@channel/videos --start 1 --end 20
 
-### To change output location:
-- `OUTPUT_DIR = "./my_audios"` → Saves to a different folder
-- `OUTPUT_DIR = "C:/Users/Name/Documents/audios"` → Absolute path
+# Transcribe all videos
+python transcribe.py https://www.youtube.com/@channel/videos
 
-## What It Does
+# Keep fallback audio files
+python transcribe.py https://www.youtube.com/@channel/videos --keep-audio
 
-- **Direct audio fetching** - Downloads only audio, not video
-- **MP3 format** - Converts to 128kbps MP3 files
-- **Organized output** - Files named by video ID in the specified folder
-- **Progress tracking** - Shows download progress for each video
+# Use a different Whisper model
+python transcribe.py https://www.youtube.com/@channel/videos --model large --device cuda
+```
 
-## Notes
+### `fetcher.py` — Audio-only download
 
-- Requires `ffmpeg` installed on your system for audio conversion
-- Videos are indexed from most recent (1) to older
-- The script skips videos that fail to download and continues with the rest
-- All audio files are saved as `{video_id}.mp3` in the output directory
+```bash
+# Download audio for videos 1–10
+python fetcher.py https://www.youtube.com/@channel/videos --start 1 --end 10
+
+# Download all videos
+python fetcher.py https://www.youtube.com/@channel/videos
+```
+
+### `transcript_fetcher.py` — YouTube captions only (no Whisper)
+
+```bash
+# Fetch captions for videos 1–10
+python transcript_fetcher.py https://www.youtube.com/@channel/videos --start 1 --end 10
+
+# Fetch all, with language fallback
+python transcript_fetcher.py https://www.youtube.com/@channel/videos --languages en es
+```
+
+### `transcriber.py` — Whisper-only (for already downloaded audio)
+
+```bash
+# Transcribe all audio in a channel folder
+python transcriber.py Channel_Name
+
+# Override model/language
+python transcriber.py Channel_Name --model large --language en --no-timestamps
+```
+
+## Output Structure
+
+```
+channels/
+└── Channel_Name/
+    ├── audios/         ← fetcher.py output
+    └── transcripts/    ← transcript files (from any script)
+```
+
+Transcript files include a source header:
+```
+# Video Title
+# source: youtube-api
+
+[0.0s] Hello and welcome...
+[3.5s] Today we're going to...
+```
+
+## CLI Options (common to all scripts)
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--start` | First video index (1 = most recent) | `1` |
+| `--end` | Last video index (omit for all) | all |
+| `--base-dir` | Root output directory | `./channels` |
+| `--languages` | Preferred transcript languages | `en` |
+
+## config.yaml
+
+Whisper defaults — avoids passing flags every time:
+
+```yaml
+model_size: "medium"        # tiny | base | small | medium | large
+device: "cuda"              # cuda | cpu
+language: null              # "en" to skip auto-detect, null = auto
+return_timestamps: true     # timestamped segments vs plain text
+keep_audio: false           # keep Whisper fallback audio files
+```
+
+All config values can be overridden via CLI args.

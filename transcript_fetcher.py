@@ -3,10 +3,10 @@ import os
 import re
 import sys
 import yt_dlp
+from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 
 
 def slugify(name: str) -> str:
-    """Turn a channel name into a safe folder name."""
     return re.sub(r"[^\w\-]", "_", name).strip("_")
 
 
@@ -44,54 +44,55 @@ def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]
     return videos
 
 
-def download_audio(video: dict, output_dir: str) -> None:
-    out_path = os.path.join(output_dir, f"{video['id']}.mp3")
+def fetch_transcript(video: dict, output_dir: str, languages: list[str]) -> None:
+    vid_id = video["id"]
+    out_path = os.path.join(output_dir, f"{vid_id}.txt")
+
     if os.path.exists(out_path):
-        print(f"⏭️  Already exists, skipping: {video['id']}\n")
+        print(f"⏭️  Already exists, skipping: {vid_id}\n")
         return
 
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "outtmpl": os.path.join(output_dir, "%(id)s.%(ext)s"),
-        "quiet": False,
-        "no_warnings": True,
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "128",
-        }],
-    }
-
-    print(f"⬇️  Downloading: {video['title']}")
+    print(f"📄 Fetching: {video['title']}")
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"https://www.youtube.com/watch?v={video['id']}"])
-        print(f"✅ Done: {video['id']}.mp3\n")
-    except yt_dlp.utils.DownloadError as e:
-        print(f"⚠️  Skipped {video['id']} — {e}\n")
+        ytt = YouTubeTranscriptApi()
+        transcript = ytt.fetch(vid_id, languages=languages)
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(f"# {video['title']}\n\n")
+            for s in transcript:
+                f.write(f"[{s.start:.1f}s] {s.text.strip()}\n")
+
+        print(f"✅ Saved → {out_path}\n")
+    except TranscriptsDisabled:
+        print(f"⚠️  Skipped {vid_id} — transcripts disabled.\n")
+    except NoTranscriptFound:
+        print(f"⚠️  Skipped {vid_id} — no transcript in {languages}.\n")
+    except Exception as e:
+        print(f"❌  Error for {vid_id}: {e}\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fetch audio from a YouTube channel.")
+    parser = argparse.ArgumentParser(description="Fetch YouTube transcripts for a channel.")
     parser.add_argument("channel_url", help="YouTube channel videos URL")
     parser.add_argument("--start", type=int, default=1, help="Start index (default: 1)")
     parser.add_argument("--end", type=int, default=None, help="End index (default: all videos)")
     parser.add_argument("--output-dir", default="./channels", help="Base output directory (default: ./channels)")
+    parser.add_argument("--languages", nargs="+", default=["en"], help="Preferred transcript languages (default: en)")
     args = parser.parse_args()
 
     channel_name = slugify(get_channel_name(args.channel_url))
-    output_dir = os.path.join(args.output_dir, channel_name, "audios")
+    output_dir = os.path.join(args.output_dir, channel_name, "transcripts")
     os.makedirs(output_dir, exist_ok=True)
 
     videos = fetch_video_ids(args.channel_url, args.start, args.end)
 
-    print(f"📥 Saving audio to '{output_dir}/'...\n" + "─" * 50)
+    print(f"📥 Saving transcripts to '{output_dir}/'...\n" + "─" * 50)
     for i, video in enumerate(videos, 1):
         print(f"[{i}/{len(videos)}] ", end="")
-        download_audio(video, output_dir)
+        fetch_transcript(video, output_dir, args.languages)
 
     print("─" * 50)
-    print(f"\n🎉 Done! {len(videos)} files in '{output_dir}/'")
+    print(f"\n🎉 Done! Transcripts in '{output_dir}/'")
 
 
 if __name__ == "__main__":

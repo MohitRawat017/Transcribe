@@ -1,0 +1,9 @@
+# Whisper transcriber defaults — all can be overridden via CLI args
+
+model_size: "medium"        # tiny | base | small | medium | large
+device: "cuda"              # cuda | cpu
+language: null              # e.g. "en" to skip auto-detect (faster), null = auto
+return_timestamps: true     # true = timestamped segments, false = plain text
+
+# keep audio files downloaded during Whisper fallback
+keep_audio: false

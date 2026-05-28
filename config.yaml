@@ -1,9 +1,14 @@
-# Whisper transcriber defaults — all can be overridden via CLI args
+# faster-whisper transcriber defaults — all can be overridden via CLI args
 
-model_size: "medium"        # tiny | base | small | medium | large
+model: "Systran/faster-distil-whisper-large-v3"   # English-only, distilled, 6× faster
 device: "cuda"              # cuda | cpu
-language: null              # e.g. "en" to skip auto-detect (faster), null = auto
+compute_type: "float16"     # float16 (GPU) | int8_float16 (low VRAM) | int8 (CPU)
+language: "en"              # distil-large-v3 is English-only
 return_timestamps: true     # true = timestamped segments, false = plain text
 
 # keep audio files downloaded during Whisper fallback
 keep_audio: false
+
+# transcript storage — at least one must be true
+save_local: true        # save .txt files to ./channels/{channel}/transcripts/
+send_telegram: false    # upload transcripts to Telegram channel (requires env vars)

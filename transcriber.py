@@ -2,8 +2,8 @@ import argparse
 import os
 import yaml
 import torch
-import whisper
 from pathlib import Path
+from faster_whisper import WhisperModel
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -16,16 +16,17 @@ def load_config(path: str = "config.yaml") -> dict:
 def main():
     cfg = load_config()
 
-    parser = argparse.ArgumentParser(description="Transcribe audio files using Whisper.")
+    parser = argparse.ArgumentParser(description="Transcribe audio files using faster-whisper.")
     parser.add_argument("channel", help="Channel folder name under ./channels/")
     parser.add_argument("--base-dir", default="./channels", help="Base channels directory (default: ./channels)")
-    parser.add_argument("--model", default=cfg.get("model_size", "medium"), help="Whisper model size (default: medium)")
-    parser.add_argument("--language", default=cfg.get("language", None), help="Language code e.g. 'en' (default: auto-detect)")
+    parser.add_argument("--model", default=cfg.get("model", "Systran/faster-distil-whisper-large-v3"))
+    parser.add_argument("--language", default=cfg.get("language", "en"))
     parser.add_argument("--device", default=cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+    parser.add_argument("--compute-type", default=cfg.get("compute_type", "float16"))
     parser.add_argument("--timestamps", action=argparse.BooleanOptionalAction, default=cfg.get("return_timestamps", True))
     args = parser.parse_args()
 
-    audio_dir = Path(args.base_dir) / args.channel / "audios"
+    audio_dir  = Path(args.base_dir) / args.channel / "audios"
     output_dir = Path(args.base_dir) / args.channel / "transcripts"
 
     if not audio_dir.exists():
@@ -34,39 +35,44 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    mp3_files = sorted(audio_dir.glob("*.mp3"))
-    if not mp3_files:
-        print(f"❌ No MP3 files found in {audio_dir}")
+    # accept any audio extension yt-dlp/fetcher.py might produce
+    audio_files = sorted(
+        p for p in audio_dir.iterdir()
+        if p.suffix.lower() in {".mp3", ".opus", ".ogg", ".m4a", ".webm", ".wav"}
+    )
+    if not audio_files:
+        print(f"❌ No audio files found in {audio_dir}")
         raise SystemExit(1)
 
-    print(f"🔊 Loading whisper-{args.model} on {args.device}...")
-    model = whisper.load_model(args.model, device=args.device)
-    print(f"✅ Model loaded. Transcribing {len(mp3_files)} files...\n" + "─" * 50)
+    print(f"🔊 Loading {args.model} on {args.device} ({args.compute_type})...")
+    model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
+    print(f"✅ Model loaded. Transcribing {len(audio_files)} files...\n" + "─" * 50)
 
     passed, failed = 0, []
 
-    for i, audio_path in enumerate(mp3_files, 1):
+    for i, audio_path in enumerate(audio_files, 1):
         out_path = output_dir / (audio_path.stem + ".txt")
 
         if out_path.exists():
-            print(f"[{i}/{len(mp3_files)}] ⏭️  Skipping {audio_path.name} (already done)\n")
+            print(f"[{i}/{len(audio_files)}] ⏭️  Skipping {audio_path.name} (already done)\n")
             continue
 
-        print(f"[{i}/{len(mp3_files)}] 🎙️  {audio_path.name}")
+        print(f"[{i}/{len(audio_files)}] 🎙️  {audio_path.name}")
         try:
-            result = model.transcribe(
+            segments, _info = model.transcribe(
                 str(audio_path),
                 language=args.language,
-                fp16=(args.device == "cuda"),
-                verbose=False,
+                beam_size=5,
+                vad_filter=True,
             )
 
             with open(out_path, "w", encoding="utf-8") as f:
                 if args.timestamps:
-                    for seg in result["segments"]:
-                        f.write(f"[{seg['start']:.1f}s -> {seg['end']:.1f}s] {seg['text'].strip()}\n")
+                    for seg in segments:
+                        f.write(f"[{seg.start:.1f}s -> {seg.end:.1f}s] {seg.text.strip()}\n")
                 else:
-                    f.write(result["text"])
+                    for seg in segments:
+                        f.write(seg.text.strip() + "\n")
 
             print(f"  ✅ Saved → {out_path}\n")
             passed += 1

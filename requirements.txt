@@ -1,0 +1,8 @@
+yt-dlp
+youtube-transcript-api
+faster-whisper
+torch
+torchaudio
+pyyaml
+requests
+python-dotenv

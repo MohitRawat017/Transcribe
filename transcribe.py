@@ -1,14 +1,22 @@
 import argparse
+import io
 import os
 import re
 import sys
 import time
 import yaml
 import torch
-import whisper
 import yt_dlp
+import requests
 from pathlib import Path
+from dotenv import load_dotenv
+from faster_whisper import WhisperModel
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+
+load_dotenv()
+
+TELEGRAM_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 
 
 def load_config(path: str = "config.yaml") -> dict:
@@ -57,7 +65,6 @@ def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]
 
 
 def make_filename(index: int, total: int, title: str) -> str:
-    """e.g. 01_My_Video_Title.txt"""
     pad = len(str(total))
     return f"{str(index).zfill(pad)}_{slugify(title)}.txt"
 
@@ -73,6 +80,7 @@ def try_api_transcript(vid_id: str, languages: list[str]) -> list | None:
 
 
 def download_audio(vid_id: str, audio_dir: str) -> str | None:
+    """Download audio as Opus at 64kbps mono. Returns path to the produced file."""
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": os.path.join(audio_dir, "%(id)s.%(ext)s"),
@@ -80,45 +88,83 @@ def download_audio(vid_id: str, audio_dir: str) -> str | None:
         "no_warnings": True,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "128",
+            "preferredcodec": "opus",
+            "preferredquality": "64",
         }],
+        "postprocessor_args": ["-ac", "1"],  # mono
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={vid_id}"])
-        return os.path.join(audio_dir, f"{vid_id}.mp3")
     except yt_dlp.utils.DownloadError as e:
         print(f"    ❌ Audio download failed: {e}")
         return None
 
+    # yt-dlp picks the extension based on the codec — usually .opus for opus codec.
+    # Glob to find whatever it actually produced.
+    for ext in ("opus", "ogg", "webm", "m4a", "mp3"):
+        candidate = os.path.join(audio_dir, f"{vid_id}.{ext}")
+        if os.path.exists(candidate):
+            return candidate
 
-def transcribe_audio(audio_path: str, model: whisper.Whisper, language: str, device: str) -> list[dict] | None:
+    print(f"    ❌ Audio file not found after download for {vid_id}")
+    return None
+
+
+def transcribe_audio(audio_path: str, model: WhisperModel, language: str) -> list | None:
+    """Returns a list of segments (with .start, .end, .text) or None on failure."""
     try:
-        result = model.transcribe(
+        segments, _info = model.transcribe(
             audio_path,
             language=language,
-            fp16=(device == "cuda"),
-            verbose=False,
+            beam_size=5,
+            vad_filter=True,  # skip silent regions for a small speed-up
         )
-        return result["segments"]
+        # segments is a generator — materialize it so we can iterate twice if needed
+        return list(segments)
     except Exception as e:
         print(f"    ❌ Whisper failed: {e}")
         return None
 
 
-def write_transcript(out_path: Path, title: str, segments, source: str, timestamps: bool) -> None:
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(f"# {title}\n# source: {source}\n\n")
+def build_transcript_text(title: str, segments, source: str, timestamps: bool) -> str:
+    lines = [f"# {title}", f"# source: {source}", ""]
+    for s in segments:
+        text = s.text.strip() if hasattr(s, "text") else s["text"].strip()
         if timestamps:
-            for s in segments:
-                start = s.start if hasattr(s, "start") else s["start"]
-                text  = s.text.strip() if hasattr(s, "text") else s["text"].strip()
-                f.write(f"[{start:.1f}s] {text}\n")
+            start = s.start if hasattr(s, "start") else s["start"]
+            lines.append(f"[{start:.1f}s] {text}")
         else:
-            for s in segments:
-                text = s.text.strip() if hasattr(s, "text") else s["text"].strip()
-                f.write(f"{text}\n")
+            lines.append(text)
+    return "\n".join(lines)
+
+
+def save_transcript_locally(out_path: Path, content: str) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(content, encoding="utf-8")
+
+
+def send_transcript_to_telegram(filename: str, content: str) -> bool:
+    """Upload transcript text as a .txt document to Telegram channel."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHANNEL_ID:
+        print("    ⚠️  Telegram env vars not set — skipping upload.")
+        return False
+    try:
+        url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
+        data = {"chat_id": TELEGRAM_CHANNEL_ID, "caption": filename}
+        files = {"document": (filename, io.BytesIO(content.encode("utf-8")), "text/plain")}
+        resp = requests.post(url, data=data, files=files, timeout=30)
+        if not resp.ok:
+            try:
+                err = resp.json().get("description", resp.text)
+            except Exception:
+                err = resp.text
+            print(f"    ❌ Telegram upload failed ({resp.status_code}): {err}")
+            return False
+        return True
+    except Exception as e:
+        print(f"    ❌ Telegram upload failed: {e}")
+        return False
 
 
 def fmt_duration(seconds: float) -> str:
@@ -135,16 +181,29 @@ def main():
     parser.add_argument("--end", type=int, default=None, help="End index (default: all)")
     parser.add_argument("--base-dir", default="./channels")
     parser.add_argument("--languages", nargs="+", default=["en"])
-    parser.add_argument("--model", default=cfg.get("model_size", "medium"))
+    parser.add_argument("--model", default=cfg.get("model", "Systran/faster-distil-whisper-large-v3"))
     parser.add_argument("--device", default=cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+    parser.add_argument("--compute-type", default=cfg.get("compute_type", "float16"),
+                        help="float16 | int8_float16 | int8 (default: float16)")
     parser.add_argument("--timestamps", action=argparse.BooleanOptionalAction, default=cfg.get("return_timestamps", True))
     parser.add_argument("--keep-audio", action=argparse.BooleanOptionalAction, default=cfg.get("keep_audio", False))
+    # Storage flags
+    parser.add_argument("--save-local", action=argparse.BooleanOptionalAction, default=cfg.get("save_local", True),
+                        help="Save transcripts to local disk (default: true)")
+    parser.add_argument("--send-telegram", action=argparse.BooleanOptionalAction, default=cfg.get("send_telegram", False),
+                        help="Upload transcripts to Telegram channel (default: false)")
     args = parser.parse_args()
 
-    channel_name = slugify(get_channel_name(args.channel_url))
+    if not args.save_local and not args.send_telegram:
+        print("❌ At least one of --save-local or --send-telegram must be enabled.")
+        sys.exit(1)
+
+    channel_name   = slugify(get_channel_name(args.channel_url))
     transcript_dir = Path(args.base_dir) / channel_name / "transcripts"
     audio_dir      = Path(args.base_dir) / channel_name / "_temp_audio"
-    transcript_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.save_local:
+        transcript_dir.mkdir(parents=True, exist_ok=True)
 
     videos = fetch_video_ids(args.channel_url, args.start, args.end)
     total  = len(videos)
@@ -152,7 +211,11 @@ def main():
     whisper_model = None
     stats = {"api": 0, "whisper": 0, "failed": 0}
 
-    print(f"📝 Saving transcripts to '{transcript_dir}/'...\n" + "─" * 50)
+    dest = []
+    if args.save_local:    dest.append(f"'{transcript_dir}/'")
+    if args.send_telegram: dest.append("Telegram")
+    print(f"📝 Saving transcripts to {' + '.join(dest)}...\n" + "─" * 50)
+
     run_start = time.perf_counter()
 
     for i, video in enumerate(videos, 1):
@@ -163,14 +226,18 @@ def main():
         t0 = time.perf_counter()
         print(f"[{i}/{total}] {video['title']}")
 
-        if out_path.exists():
+        if args.save_local and out_path.exists():
             print(f"  ⏭️  Already exists, skipping.\n")
             continue
 
         # ── Step 1: YouTube Transcript API ──
         snippets = try_api_transcript(vid_id, args.languages)
         if snippets:
-            write_transcript(out_path, video["title"], snippets, "youtube-api", args.timestamps)
+            content = build_transcript_text(video["title"], snippets, "youtube-api", args.timestamps)
+            if args.save_local:
+                save_transcript_locally(out_path, content)
+            if args.send_telegram:
+                send_transcript_to_telegram(filename, content)
             print(f"  ✅ API transcript saved. ({fmt_duration(time.perf_counter() - t0)})\n")
             stats["api"] += 1
             continue
@@ -179,8 +246,8 @@ def main():
         print(f"  ⚠️  API failed — falling back to Whisper...")
 
         if whisper_model is None:
-            print(f"  🔊 Loading whisper-{args.model} on {args.device}...")
-            whisper_model = whisper.load_model(args.model, device=args.device)
+            print(f"  🔊 Loading {args.model} on {args.device} ({args.compute_type})...")
+            whisper_model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
 
         audio_dir.mkdir(parents=True, exist_ok=True)
         audio_path = download_audio(vid_id, str(audio_dir))
@@ -190,7 +257,7 @@ def main():
             stats["failed"] += 1
             continue
 
-        segments = transcribe_audio(audio_path, whisper_model, args.languages[0], args.device)
+        segments = transcribe_audio(audio_path, whisper_model, args.languages[0])
 
         if not args.keep_audio and os.path.exists(audio_path):
             os.remove(audio_path)
@@ -200,7 +267,11 @@ def main():
             stats["failed"] += 1
             continue
 
-        write_transcript(out_path, video["title"], segments, "whisper", args.timestamps)
+        content = build_transcript_text(video["title"], segments, "whisper", args.timestamps)
+        if args.save_local:
+            save_transcript_locally(out_path, content)
+        if args.send_telegram:
+            send_transcript_to_telegram(filename, content)
         print(f"  ✅ Whisper transcript saved. ({fmt_duration(time.perf_counter() - t0)})\n")
         stats["whisper"] += 1
 

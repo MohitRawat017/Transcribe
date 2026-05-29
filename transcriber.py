@@ -59,20 +59,24 @@ def main():
 
         print(f"[{i}/{len(audio_files)}] 🎙️  {audio_path.name}")
         try:
-            segments, _info = model.transcribe(
+            segments, info = model.transcribe(
                 str(audio_path),
                 language=args.language,
                 beam_size=5,
                 vad_filter=True,
             )
+            duration = info.duration
 
             with open(out_path, "w", encoding="utf-8") as f:
-                if args.timestamps:
-                    for seg in segments:
+                for seg in segments:
+                    pct = int(seg.end / duration * 30) if duration else 0
+                    bar = "█" * pct + "░" * (30 - pct)
+                    print(f"\r    [{bar}] {seg.end / duration * 100:5.1f}%", end="", flush=True)
+                    if args.timestamps:
                         f.write(f"[{seg.start:.1f}s -> {seg.end:.1f}s] {seg.text.strip()}\n")
-                else:
-                    for seg in segments:
+                    else:
                         f.write(seg.text.strip() + "\n")
+            print()  # newline after bar completes
 
             print(f"  ✅ Saved → {out_path}\n")
             passed += 1

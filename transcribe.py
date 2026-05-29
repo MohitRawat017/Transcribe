@@ -112,18 +112,24 @@ def download_audio(vid_id: str, audio_dir: str) -> str | None:
 
 
 def transcribe_audio(audio_path: str, model: WhisperModel, language: str) -> list | None:
-    """Returns a list of segments (with .start, .end, .text) or None on failure."""
     try:
-        segments, _info = model.transcribe(
+        segments, info = model.transcribe(
             audio_path,
             language=language,
             beam_size=5,
-            vad_filter=True,  # skip silent regions for a small speed-up
+            vad_filter=True,
         )
-        # segments is a generator — materialize it so we can iterate twice if needed
-        return list(segments)
+        duration = info.duration
+        result = []
+        for seg in segments:
+            result.append(seg)
+            pct = int(seg.end / duration * 30) if duration else 0
+            bar = "█" * pct + "░" * (30 - pct)
+            print(f"\r    [{bar}] {seg.end / duration * 100:5.1f}%", end="", flush=True)
+        print()  # newline after bar completes
+        return result
     except Exception as e:
-        print(f"    ❌ Whisper failed: {e}")
+        print(f"\n    ❌ Whisper failed: {e}")
         return None
 
 

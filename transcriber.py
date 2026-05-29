@@ -18,7 +18,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Transcribe audio files using faster-whisper.")
     parser.add_argument("channel", help="Channel folder name under ./channels/")
-    parser.add_argument("--base-dir", default="./channels", help="Base channels directory (default: ./channels)")
+    parser.add_argument("--base-dir", default="./channels")
     parser.add_argument("--model", default=cfg.get("model", "Systran/faster-distil-whisper-large-v3"))
     parser.add_argument("--language", default=cfg.get("language", "en"))
     parser.add_argument("--device", default=cfg.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
@@ -30,23 +30,23 @@ def main():
     output_dir = Path(args.base_dir) / args.channel / "transcripts"
 
     if not audio_dir.exists():
-        print(f"❌ Audio directory not found: {audio_dir}")
+        print(f"Error: audio directory not found: {audio_dir}")
         raise SystemExit(1)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # accept any audio extension yt-dlp/fetcher.py might produce
     audio_files = sorted(
         p for p in audio_dir.iterdir()
         if p.suffix.lower() in {".mp3", ".opus", ".ogg", ".m4a", ".webm", ".wav"}
     )
     if not audio_files:
-        print(f"❌ No audio files found in {audio_dir}")
+        print(f"Error: no audio files found in {audio_dir}")
         raise SystemExit(1)
 
-    print(f"🔊 Loading {args.model} on {args.device} ({args.compute_type})...")
+    print(f"Loading {args.model} on {args.device} ({args.compute_type})...")
     model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
-    print(f"✅ Model loaded. Transcribing {len(audio_files)} files...\n" + "─" * 50)
+    print(f"Model loaded. Transcribing {len(audio_files)} files...")
+    print("-" * 60)
 
     passed, failed = 0, []
 
@@ -54,10 +54,10 @@ def main():
         out_path = output_dir / (audio_path.stem + ".txt")
 
         if out_path.exists():
-            print(f"[{i}/{len(audio_files)}] ⏭️  Skipping {audio_path.name} (already done)\n")
+            print(f"[{i}/{len(audio_files)}] Skipping {audio_path.name} (already done)\n")
             continue
 
-        print(f"[{i}/{len(audio_files)}] 🎙️  {audio_path.name}")
+        print(f"[{i}/{len(audio_files)}] {audio_path.name}")
         try:
             segments, info = model.transcribe(
                 str(audio_path),
@@ -70,24 +70,24 @@ def main():
             with open(out_path, "w", encoding="utf-8") as f:
                 for seg in segments:
                     pct = int(seg.end / duration * 30) if duration else 0
-                    bar = "█" * pct + "░" * (30 - pct)
-                    print(f"\r    [{bar}] {seg.end / duration * 100:5.1f}%", end="", flush=True)
+                    bar = "#" * pct + "-" * (30 - pct)
+                    print(f"\r  [{bar}] {seg.end / duration * 100:5.1f}%", end="", flush=True)
                     if args.timestamps:
                         f.write(f"[{seg.start:.1f}s -> {seg.end:.1f}s] {seg.text.strip()}\n")
                     else:
                         f.write(seg.text.strip() + "\n")
-            print()  # newline after bar completes
+            print()
 
-            print(f"  ✅ Saved → {out_path}\n")
+            print(f"  Saved -> {out_path}\n")
             passed += 1
         except Exception as e:
-            print(f"  ❌ Failed: {e}\n")
+            print(f"  Failed: {e}\n")
             failed.append(audio_path.name)
 
-    print("─" * 50)
-    print(f"✅ Transcribed: {passed}  |  ❌ Failed: {len(failed)}")
+    print("-" * 60)
+    print(f"Transcribed: {passed}  Failed: {len(failed)}")
     for name in failed:
-        print(f"   - {name}")
+        print(f"  - {name}")
 
 
 if __name__ == "__main__":

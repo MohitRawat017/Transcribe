@@ -47,12 +47,12 @@ def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]
     if end is not None:
         ydl_opts["playlistend"] = end
 
-    print(f"\n🔍 Scanning channel (videos {start}–{'all' if end is None else end})...")
+    print(f"Scanning channel (videos {start}-{'all' if end is None else end})...")
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
 
     if not info or "entries" not in info:
-        print("❌ Could not fetch channel info. Check the URL.")
+        print("Error: could not fetch channel info. Check the URL.")
         sys.exit(1)
 
     videos = [
@@ -60,7 +60,7 @@ def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]
         for e in info["entries"]
         if e and e.get("id") and not e["id"].startswith("UC")
     ]
-    print(f"✅ Found {len(videos)} videos.\n")
+    print(f"Found {len(videos)} videos.\n")
     return videos
 
 
@@ -80,7 +80,6 @@ def try_api_transcript(vid_id: str, languages: list[str]) -> list | None:
 
 
 def download_audio(vid_id: str, audio_dir: str) -> str | None:
-    """Download audio as Opus at 64kbps mono. Returns path to the produced file."""
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": os.path.join(audio_dir, "%(id)s.%(ext)s"),
@@ -91,23 +90,21 @@ def download_audio(vid_id: str, audio_dir: str) -> str | None:
             "preferredcodec": "opus",
             "preferredquality": "64",
         }],
-        "postprocessor_args": ["-ac", "1"],  # mono
+        "postprocessor_args": ["-ac", "1"],
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={vid_id}"])
     except yt_dlp.utils.DownloadError as e:
-        print(f"    ❌ Audio download failed: {e}")
+        print(f"  Audio download failed: {e}")
         return None
 
-    # yt-dlp picks the extension based on the codec — usually .opus for opus codec.
-    # Glob to find whatever it actually produced.
     for ext in ("opus", "ogg", "webm", "m4a", "mp3"):
         candidate = os.path.join(audio_dir, f"{vid_id}.{ext}")
         if os.path.exists(candidate):
             return candidate
 
-    print(f"    ❌ Audio file not found after download for {vid_id}")
+    print(f"  Audio file not found after download for {vid_id}")
     return None
 
 
@@ -124,12 +121,12 @@ def transcribe_audio(audio_path: str, model: WhisperModel, language: str) -> lis
         for seg in segments:
             result.append(seg)
             pct = int(seg.end / duration * 30) if duration else 0
-            bar = "█" * pct + "░" * (30 - pct)
-            print(f"\r    [{bar}] {seg.end / duration * 100:5.1f}%", end="", flush=True)
-        print()  # newline after bar completes
+            bar = "#" * pct + "-" * (30 - pct)
+            print(f"\r  [{bar}] {seg.end / duration * 100:5.1f}%", end="", flush=True)
+        print()
         return result
     except Exception as e:
-        print(f"\n    ❌ Whisper failed: {e}")
+        print(f"\n  Whisper failed: {e}")
         return None
 
 
@@ -151,9 +148,8 @@ def save_transcript_locally(out_path: Path, content: str) -> None:
 
 
 def send_transcript_to_telegram(filename: str, content: str) -> bool:
-    """Upload transcript text as a .txt document to Telegram channel."""
     if not TELEGRAM_TOKEN or not TELEGRAM_CHANNEL_ID:
-        print("    ⚠️  Telegram env vars not set — skipping upload.")
+        print("  Warning: Telegram env vars not set, skipping upload.")
         return False
     try:
         url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendDocument"
@@ -165,11 +161,11 @@ def send_transcript_to_telegram(filename: str, content: str) -> bool:
                 err = resp.json().get("description", resp.text)
             except Exception:
                 err = resp.text
-            print(f"    ❌ Telegram upload failed ({resp.status_code}): {err}")
+            print(f"  Telegram upload failed ({resp.status_code}): {err}")
             return False
         return True
     except Exception as e:
-        print(f"    ❌ Telegram upload failed: {e}")
+        print(f"  Telegram upload failed: {e}")
         return False
 
 
@@ -181,7 +177,7 @@ def fmt_duration(seconds: float) -> str:
 def main():
     cfg = load_config()
 
-    parser = argparse.ArgumentParser(description="Transcribe a YouTube channel (API → Whisper fallback).")
+    parser = argparse.ArgumentParser(description="Transcribe a YouTube channel (API -> Whisper fallback).")
     parser.add_argument("channel_url", help="YouTube channel videos URL")
     parser.add_argument("--start", type=int, default=1)
     parser.add_argument("--end", type=int, default=None, help="End index (default: all)")
@@ -193,20 +189,17 @@ def main():
                         help="float16 | int8_float16 | int8 (default: float16)")
     parser.add_argument("--timestamps", action=argparse.BooleanOptionalAction, default=cfg.get("return_timestamps", True))
     parser.add_argument("--keep-audio", action=argparse.BooleanOptionalAction, default=cfg.get("keep_audio", False))
-    # Storage flags
-    parser.add_argument("--save-local", action=argparse.BooleanOptionalAction, default=cfg.get("save_local", True),
-                        help="Save transcripts to local disk (default: true)")
-    parser.add_argument("--send-telegram", action=argparse.BooleanOptionalAction, default=cfg.get("send_telegram", False),
-                        help="Upload transcripts to Telegram channel (default: false)")
+    parser.add_argument("--save-local", action=argparse.BooleanOptionalAction, default=cfg.get("save_local", True))
+    parser.add_argument("--send-telegram", action=argparse.BooleanOptionalAction, default=cfg.get("send_telegram", False))
     args = parser.parse_args()
 
     if not args.save_local and not args.send_telegram:
-        print("❌ At least one of --save-local or --send-telegram must be enabled.")
+        print("Error: at least one of --save-local or --send-telegram must be enabled.")
         sys.exit(1)
 
     channel_name   = slugify(get_channel_name(args.channel_url))
     transcript_dir = Path(args.base_dir) / channel_name / "transcripts"
-    audio_dir      = Path(args.base_dir) / channel_name / "_temp_audio"
+    audio_dir      = Path(args.base_dir) / channel_name / "temp_audio"
 
     if args.save_local:
         transcript_dir.mkdir(parents=True, exist_ok=True)
@@ -220,7 +213,8 @@ def main():
     dest = []
     if args.save_local:    dest.append(f"'{transcript_dir}/'")
     if args.send_telegram: dest.append("Telegram")
-    print(f"📝 Saving transcripts to {' + '.join(dest)}...\n" + "─" * 50)
+    print(f"Saving transcripts to {' + '.join(dest)}...")
+    print("-" * 60)
 
     run_start = time.perf_counter()
 
@@ -233,10 +227,9 @@ def main():
         print(f"[{i}/{total}] {video['title']}")
 
         if args.save_local and out_path.exists():
-            print(f"  ⏭️  Already exists, skipping.\n")
+            print("  Already exists, skipping.\n")
             continue
 
-        # ── Step 1: YouTube Transcript API ──
         snippets = try_api_transcript(vid_id, args.languages)
         if snippets:
             content = build_transcript_text(video["title"], snippets, "youtube-api", args.timestamps)
@@ -244,22 +237,21 @@ def main():
                 save_transcript_locally(out_path, content)
             if args.send_telegram:
                 send_transcript_to_telegram(filename, content)
-            print(f"  ✅ API transcript saved. ({fmt_duration(time.perf_counter() - t0)})\n")
+            print(f"  API transcript saved. ({fmt_duration(time.perf_counter() - t0)})\n")
             stats["api"] += 1
             continue
 
-        # ── Step 2: Whisper fallback ──
-        print(f"  ⚠️  API failed — falling back to Whisper...")
+        print("  API failed, falling back to Whisper...")
 
         if whisper_model is None:
-            print(f"  🔊 Loading {args.model} on {args.device} ({args.compute_type})...")
+            print(f"  Loading {args.model} on {args.device} ({args.compute_type})...")
             whisper_model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
 
         audio_dir.mkdir(parents=True, exist_ok=True)
         audio_path = download_audio(vid_id, str(audio_dir))
 
         if audio_path is None:
-            print(f"  ❌ Skipping — could not download audio.\n")
+            print("  Skipping: could not download audio.\n")
             stats["failed"] += 1
             continue
 
@@ -269,7 +261,7 @@ def main():
             os.remove(audio_path)
 
         if segments is None:
-            print(f"  ❌ Skipping — Whisper transcription failed.\n")
+            print("  Skipping: Whisper transcription failed.\n")
             stats["failed"] += 1
             continue
 
@@ -278,16 +270,16 @@ def main():
             save_transcript_locally(out_path, content)
         if args.send_telegram:
             send_transcript_to_telegram(filename, content)
-        print(f"  ✅ Whisper transcript saved. ({fmt_duration(time.perf_counter() - t0)})\n")
+        print(f"  Whisper transcript saved. ({fmt_duration(time.perf_counter() - t0)})\n")
         stats["whisper"] += 1
 
     if not args.keep_audio and audio_dir.exists() and not any(audio_dir.iterdir()):
         audio_dir.rmdir()
 
     total_time = fmt_duration(time.perf_counter() - run_start)
-    print("─" * 50)
-    print(f"✅ API: {stats['api']}  |  🎙️ Whisper: {stats['whisper']}  |  ❌ Failed: {stats['failed']}")
-    print(f"⏱️  Total time: {total_time}")
+    print("-" * 60)
+    print(f"API: {stats['api']}  Whisper: {stats['whisper']}  Failed: {stats['failed']}")
+    print(f"Total time: {total_time}")
 
 
 if __name__ == "__main__":

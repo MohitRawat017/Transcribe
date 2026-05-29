@@ -72,7 +72,7 @@ python transcript_fetcher.py https://www.youtube.com/@channel/videos --languages
 python transcriber.py Channel_Name
 
 # Override model/language
-python transcriber.py Channel_Name --model large --language en --no-timestamps
+python transcriber.py Channel_Name --model Systran/faster-whisper-large-v3 --language en --no-timestamps
 ```
 
 ---
@@ -82,8 +82,8 @@ python transcriber.py Channel_Name --model large --language en --no-timestamps
 ```
 channels/
 └── Channel_Name/
-    ├── audios/         ← fetcher.py output
-    └── transcripts/    ← transcript files (from any script)
+    ├── audios/         <- fetcher.py output
+    └── transcripts/    <- transcript files (from any script)
 ```
 
 Transcript files include a source header:
@@ -145,16 +145,11 @@ send_telegram: false        # upload transcripts to Telegram channel
 
 ## Telegram Setup
 
-To enable Telegram transcript uploads, set these environment variables before running:
+To enable Telegram transcript uploads, create a `.env` file in the project root:
 
-```bash
-# Windows PowerShell
-$env:TELEGRAM_BOT_TOKEN="your_bot_token_here"
-$env:TELEGRAM_CHANNEL_ID="@yourchannel_or_-100xxxxxxxxx"
-
-# Linux / macOS
-export TELEGRAM_BOT_TOKEN="your_bot_token_here"
-export TELEGRAM_CHANNEL_ID="@yourchannel_or_-100xxxxxxxxx"
+```
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+TELEGRAM_CHANNEL_ID=@yourchannel_or_-100xxxxxxxxx
 ```
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) to get a token

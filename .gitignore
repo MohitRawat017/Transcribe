@@ -13,3 +13,4 @@ audios/
 *.env
 /channels
 terminal_output.md
+*.md.bak

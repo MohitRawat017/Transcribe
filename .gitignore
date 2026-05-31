@@ -14,3 +14,8 @@ audios/
 /channels
 terminal_output.md
 *.md.bak
+client_secret.json
+token.json
+
+claude.md 
+plan/

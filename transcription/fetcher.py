@@ -77,11 +77,11 @@ def main():
     parser.add_argument("channel_url", help="YouTube channel videos URL")
     parser.add_argument("--start", type=int, default=1, help="Start index (default: 1)")
     parser.add_argument("--end", type=int, default=None, help="End index (default: all)")
-    parser.add_argument("--output-dir", default="./channels", help="Base output directory (default: ./channels)")
+    parser.add_argument("--base-dir", default="./channels", help="Base output directory (default: ./channels)")
     args = parser.parse_args()
 
     channel_name = slugify(get_channel_name(args.channel_url))
-    output_dir = os.path.join(args.output_dir, channel_name, "audios")
+    output_dir = os.path.join(args.base_dir, channel_name, "audios")
     os.makedirs(output_dir, exist_ok=True)
 
     videos = fetch_video_ids(args.channel_url, args.start, args.end)

@@ -1,4 +1,5 @@
 import argparse
+import gc
 import io
 import os
 import re
@@ -275,6 +276,13 @@ def main():
 
     if not args.keep_audio and audio_dir.exists() and not any(audio_dir.iterdir()):
         audio_dir.rmdir()
+
+    # release the Whisper model from GPU so it doesn't hold VRAM (e.g. before running Ollama)
+    if whisper_model is not None:
+        del whisper_model
+        gc.collect()
+        if args.device == "cuda":
+            torch.cuda.empty_cache()
 
     total_time = fmt_duration(time.perf_counter() - run_start)
     print("-" * 60)

@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    env_file: .env                     # LLM_API_KEY, BLOGGER_BLOG_ID
+    volumes:
+      - ./channels:/app/channels       # transcripts in, blogs out
+      - ./token.json:/app/token.json:ro
+      - ./client_secret.json:/app/client_secret.json:ro
+
+  # --- optional: local model on a GPU host (run with `--profile gpu`) ---
+  vllm:
+    image: vllm/vllm-openai:v0.6.3      # pin a real version
+    profiles: ["gpu"]
+    command: ["--model", "Qwen/Qwen2.5-7B-Instruct"]
+    ipc: host
+    ports: ["8000:8000"]
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

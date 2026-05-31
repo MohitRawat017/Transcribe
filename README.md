@@ -1,157 +1,117 @@
-# YouTube Audio & Transcript Fetcher
+# YouTube → Blog Pipeline
 
-A toolkit for fetching audio and transcripts from YouTube channels. All scripts use CLI arguments — no hardcoding needed.
+Fetch YouTube transcripts (or transcribe audio with Whisper), turn them into blog posts
+with an LLM, and publish to Blogger. All scripts are CLI-driven.
+
+> Run every script **from the repo root** — they resolve `config.yaml` and credential
+> files by relative path.
+
+## Structure
+
+```
+transcription/        # stage 1: get transcripts
+  fetcher.py            audio-only download
+  transcript_fetcher.py YouTube captions only
+  transcribe.py         API captions + Whisper fallback (recommended)
+  transcriber.py        Whisper on already-downloaded audio
+blog/                 # stage 2 + 3: generate and publish
+  blogify.py            transcript -> blog post (LLM)
+  publish.py            blog post -> Blogger
+plan/                 # phase1.md (local), phase2.md (docker/deploy)
+config.yaml           # whisper + llm + storage defaults
+requirements.txt      # transcription deps
+requirements-app.txt  # blog deps (used by the Docker image)
+channels/             # data: channels/<Channel>/{audios,transcripts,blogs}/
+```
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
 ```
-
-For GPU support (replace `cu121` with your CUDA version):
+GPU Whisper (replace `cu121` with your CUDA version):
 ```bash
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
+Requires `ffmpeg` for audio conversion.
 
-Requires `ffmpeg` installed on your system for audio conversion.
-
----
-
-## Scripts
-
-### `transcribe.py` — Unified transcription (recommended)
-
-Fetches transcripts using YouTube's API first, falls back to **faster-whisper + distil-large-v3** for videos without captions. Audio is downloaded as Opus/OGG (64 kbps mono) for the Whisper fallback and deleted after transcription.
-
-> **Note:** `distil-large-v3` is English-only. For non-English channels, override with `--model Systran/faster-whisper-large-v3` (multilingual, slightly slower).
+## Stage 1 — Transcripts
 
 ```bash
-# Transcribe videos 1–20
-python transcribe.py https://www.youtube.com/@channel/videos --start 1 --end 20
+# API captions first, Whisper fallback for videos without captions (recommended)
+python transcription/transcribe.py https://www.youtube.com/@channel/videos --start 1 --end 20
 
-# Transcribe all videos
-python transcribe.py https://www.youtube.com/@channel/videos
+# captions only (no Whisper)
+python transcription/transcript_fetcher.py https://www.youtube.com/@channel/videos
 
-# Upload transcripts to Telegram instead of saving locally
-python transcribe.py https://www.youtube.com/@channel/videos --no-save-local --send-telegram
+# audio-only download
+python transcription/fetcher.py https://www.youtube.com/@channel/videos
 
-# Save locally AND send to Telegram
-python transcribe.py https://www.youtube.com/@channel/videos --send-telegram
-
-# Keep Whisper fallback audio files
-python transcribe.py https://www.youtube.com/@channel/videos --keep-audio
-
-# Use the multilingual model
-python transcribe.py https://www.youtube.com/@channel/videos --model Systran/faster-whisper-large-v3
+# Whisper on already-downloaded audio
+python transcription/transcriber.py Channel_Name
 ```
 
-### `fetcher.py` — Audio-only download
+## Stage 2 — Generate blog posts
 
 ```bash
-# Download audio for videos 1–10
-python fetcher.py https://www.youtube.com/@channel/videos --start 1 --end 10
-
-# Download all videos
-python fetcher.py https://www.youtube.com/@channel/videos
+python blog/blogify.py Channel_Name              # transcripts -> blogs/*.md
+python blog/blogify.py Channel_Name --overwrite  # regenerate existing
 ```
+Two-pass (outline → write) via an OpenAI-compatible endpoint set in `config.yaml`
+(`llm` block). Default is Groq; the API key is read from `.env` as `LLM_API_KEY`.
 
-### `transcript_fetcher.py` — YouTube captions only (no Whisper)
+## Stage 3 — Publish to Blogger
 
 ```bash
-# Fetch captions for videos 1–10
-python transcript_fetcher.py https://www.youtube.com/@channel/videos --start 1 --end 10
-
-# Fetch all, with language fallback
-python transcript_fetcher.py https://www.youtube.com/@channel/videos --languages en es
+python blog/publish.py --list-blogs              # find your blog ID
+python blog/publish.py Channel_Name --draft      # publish drafts
+python blog/publish.py Channel_Name              # publish live
 ```
+Needs Google OAuth: enable Blogger API v3, download `client_secret.json` to the repo
+root, set `BLOGGER_BLOG_ID` in `.env`. First run opens a browser and caches `token.json`.
 
-### `transcriber.py` — Whisper-only (for already downloaded audio)
+## Docker (blog pipeline)
+
+The image contains the blog stage only (transcription stays on your GPU/Windows machine).
 
 ```bash
-# Transcribe all audio in a channel folder
-python transcriber.py Channel_Name
-
-# Override model/language
-python transcriber.py Channel_Name --model Systran/faster-whisper-large-v3 --language en --no-timestamps
+docker compose build
+docker compose run --rm app python blogify.py Channel_Name --overwrite
+docker compose run --rm app python publish.py Channel_Name --draft
 ```
-
----
-
-## Output Structure
-
-```
-channels/
-└── Channel_Name/
-    ├── audios/         <- fetcher.py output
-    └── transcripts/    <- transcript files (from any script)
-```
-
-Transcript files include a source header:
-```
-# Video Title
-# source: youtube-api
-
-[0.0s] Hello and welcome...
-[3.5s] Today we're going to...
-```
-
-Filenames are indexed and titled: `01_Video_Title.txt`, `02_Another_Video.txt`, etc.
-
----
-
-## CLI Options
-
-### Common to all scripts
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--start` | First video index (1 = most recent) | `1` |
-| `--end` | Last video index (omit for all) | all |
-| `--base-dir` | Root output directory | `./channels` |
-| `--languages` | Preferred transcript languages | `en` |
-
-### `transcribe.py` only
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--model` | HuggingFace model name (CTranslate2 format) | `Systran/faster-distil-whisper-large-v3` |
-| `--device` | `cuda` or `cpu` | auto-detect |
-| `--compute-type` | `float16` / `int8_float16` / `int8` | `float16` |
-| `--timestamps` / `--no-timestamps` | Include timestamps in output | `true` |
-| `--keep-audio` / `--no-keep-audio` | Keep Whisper fallback audio | `false` |
-| `--save-local` / `--no-save-local` | Save transcripts to disk | `true` |
-| `--send-telegram` / `--no-send-telegram` | Upload transcripts to Telegram | `false` |
-
----
+`channels/`, `.env`, `token.json`, and `client_secret.json` are mounted at runtime.
+Optional local model on a GPU host: `docker compose --profile gpu up -d vllm`, then set
+`llm.base_url` to `http://vllm:8000/v1`.
 
 ## config.yaml
 
-Whisper and storage defaults — avoids passing flags every time. All values can be overridden via CLI.
-
 ```yaml
-model: "Systran/faster-distil-whisper-large-v3"   # HF model name (CTranslate2 format)
-device: "cuda"              # cuda | cpu
-compute_type: "float16"     # float16 | int8_float16 | int8
-language: "en"              # distil-large-v3 is English-only
-return_timestamps: true     # timestamped segments vs plain text
-keep_audio: false           # keep Whisper fallback audio files
+# Whisper (transcription)
+model: "Systran/faster-distil-whisper-large-v3"
+device: "cuda"
+compute_type: "float16"
+language: "en"
+return_timestamps: true
+keep_audio: false
 
-# transcript storage — at least one must be true
-save_local: true            # save .txt files locally
-send_telegram: false        # upload transcripts to Telegram channel
+# transcript storage (at least one true)
+save_local: true
+send_telegram: false
+
+# blog generation (OpenAI-compatible endpoint)
+llm:
+  base_url: "https://api.groq.com/openai/v1"
+  api_key: "ollama"            # fallback; real key comes from .env LLM_API_KEY
+  model: "llama-3.3-70b-versatile"
+  temperature: 0.7
 ```
 
----
-
-## Telegram Setup
-
-To enable Telegram transcript uploads, create a `.env` file in the project root:
+## .env
 
 ```
-TELEGRAM_BOT_TOKEN=your_bot_token_here
-TELEGRAM_CHANNEL_ID=@yourchannel_or_-100xxxxxxxxx
+LLM_API_KEY=your_groq_or_openai_key
+BLOGGER_BLOG_ID=1234567890
+# optional, for transcribe.py --send-telegram
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHANNEL_ID=@yourchannel
 ```
-
-1. Create a bot via [@BotFather](https://t.me/BotFather) to get a token
-2. Add the bot as an admin to your channel
-3. Use `@channelname` or the numeric chat ID (e.g. `-1001234567890`) as `TELEGRAM_CHANNEL_ID`

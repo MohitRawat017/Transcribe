@@ -372,7 +372,7 @@ h2 {
 
 .job-meta {
   display: grid;
-  grid-template-columns: 0.6fr 0.6fr 1.8fr;
+  grid-template-columns: 0.55fr 0.55fr 0.9fr 1.7fr;
   gap: var(--space-2);
   margin: var(--space-3) 0;
 }

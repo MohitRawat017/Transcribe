@@ -43,21 +43,31 @@ def auth_status(root: str | Path | None = None, refresh: bool = True) -> dict:
     has_client_secret = client_secret_path.exists()
     has_blog_id = bool(os.environ.get("BLOGGER_BLOG_ID"))
     has_token = token_path.exists()
+    has_refresh_token = False
     token_valid = False
+    expiry = None
+    last_action = "missing_token"
     message = "Blogger is ready."
 
     if has_token:
         try:
             creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+            has_refresh_token = bool(creds.refresh_token)
+            expiry = creds.expiry.isoformat() if creds.expiry else None
             if creds.valid:
                 token_valid = True
+                last_action = "valid"
             elif refresh and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
                 token_path.write_text(creds.to_json(), encoding="utf-8")
                 token_valid = True
+                expiry = creds.expiry.isoformat() if creds.expiry else None
+                last_action = "refreshed"
             else:
+                last_action = "needs_reconnect"
                 message = "Blogger token is missing, expired, or needs reauthorization."
         except Exception as exc:
+            last_action = "error"
             message = f"Blogger token could not be read: {exc}"
     else:
         message = "Blogger token has not been generated yet."
@@ -76,7 +86,10 @@ def auth_status(root: str | Path | None = None, refresh: bool = True) -> dict:
         "has_client_secret": has_client_secret,
         "has_blog_id": has_blog_id,
         "has_token": has_token,
+        "has_refresh_token": has_refresh_token,
         "token_valid": token_valid,
+        "expiry": expiry,
+        "last_action": last_action,
         "message": message,
     }
 
@@ -86,13 +99,14 @@ def get_service(
     *,
     interactive: bool = True,
     require_blog_id: bool = False,
+    force_reconnect: bool = False,
 ):
     repo_root = _root(root)
     _load_env(repo_root)
     client_secret_path, token_path = _paths(repo_root)
 
     creds = None
-    if token_path.exists():
+    if token_path.exists() and not force_reconnect:
         creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
 
     if not creds or not creds.valid:
@@ -102,7 +116,7 @@ def get_service(
             if not client_secret_path.exists():
                 raise BloggerAuthError("client_secret.json is missing.")
             flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = flow.run_local_server(port=0, prompt="consent")
         else:
             raise BloggerAuthError("Blogger token is missing or invalid.")
         token_path.write_text(creds.to_json(), encoding="utf-8")
@@ -113,8 +127,15 @@ def get_service(
     return build("blogger", "v3", credentials=creds)
 
 
-def connect_blogger(root: str | Path | None = None) -> dict:
+def refresh_blogger(root: str | Path | None = None) -> dict:
+    return auth_status(root, refresh=True)
+
+
+def connect_blogger(root: str | Path | None = None, force_reconnect: bool = False) -> dict:
     repo_root = _root(root)
-    service = get_service(repo_root, interactive=True, require_blog_id=False)
+    service = get_service(repo_root, interactive=True, require_blog_id=False, force_reconnect=force_reconnect)
     service.blogs().listByUser(userId="self").execute()
-    return auth_status(repo_root, refresh=True)
+    status = auth_status(repo_root, refresh=True)
+    if force_reconnect:
+        status["last_action"] = "reconnected"
+    return status

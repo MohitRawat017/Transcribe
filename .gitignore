@@ -21,10 +21,10 @@ claude.md
 plan/
 data/
 runs/
+workspaces/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
 AGENTS.md
 skills/
-

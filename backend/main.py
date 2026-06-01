@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from backend import blogger_auth
 from backend.jobs import JobStore
-from backend.orchestrator import ActiveJobError, PipelineOrchestrator
+from backend.orchestrator import ActiveJobError, PipelineOrchestrator, StageFailure
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
@@ -44,6 +44,22 @@ def blogger_connect():
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/auth/blogger/refresh")
+def blogger_refresh():
+    try:
+        return blogger_auth.refresh(REPO_ROOT)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/blogger/reconnect")
+def blogger_reconnect():
+    try:
+        return blogger_auth.reconnect(REPO_ROOT)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/jobs", status_code=status.HTTP_202_ACCEPTED)
 def create_job(payload: JobCreateRequest):
     channel_url = payload.channel_url.strip()
@@ -62,6 +78,8 @@ def create_job(payload: JobCreateRequest):
         return orchestrator.submit(channel_url, payload.start, payload.end)
     except ActiveJobError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except StageFailure as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/jobs/{job_id}")

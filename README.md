@@ -50,8 +50,8 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 Open `http://127.0.0.1:8000`, connect Blogger if needed, paste a channel URL, and
-choose a required start/end range. Each run writes to `runs/<job_id>/` and publishes
-drafts only.
+choose a required start/end range. Jobs keep unique logs, but channel output resumes
+from `workspaces/<channel>/` and publishes drafts only.
 
 ## Stage 1 — Transcripts
 

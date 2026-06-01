@@ -13,10 +13,19 @@ class JobStoreTests(unittest.TestCase):
     def test_create_and_update_job(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = JobStore(Path(tmp) / "jobs.sqlite")
-            job = store.create_job("https://youtube.com/@demo/videos", 1, 2, str(Path(tmp) / "runs"))
+            job = store.create_job(
+                "https://youtube.com/@demo/videos",
+                1,
+                2,
+                str(Path(tmp) / "workspaces" / "demo"),
+                workspace_id="demo",
+                resumed=True,
+            )
 
             self.assertEqual(job["status"], "queued")
             self.assertEqual(job["stage"], "queued")
+            self.assertEqual(job["workspace_id"], "demo")
+            self.assertTrue(job["resumed"])
 
             store.set_running(job["id"])
             store.append_log(job["id"], "hello")
@@ -50,11 +59,11 @@ class OrchestratorTests(unittest.TestCase):
                 store.append_log(job_id, f"stage {stage}")
                 stages.append(stage)
                 if stage == "transcript_api":
-                    channel_dir = root / "runs" / job_id / "channels" / "Demo_Channel"
+                    channel_dir = root / "workspaces" / "demo" / "channels" / "Demo_Channel"
                     (channel_dir / "transcripts").mkdir(parents=True)
 
             with patch.object(orchestrator, "_run_command", side_effect=fake_run):
-                orchestrator._run(job["id"], "https://youtube.com/@demo/videos", 1, 1)
+                orchestrator._run(job["id"], "https://youtube.com/@demo/videos", 1, 1, root / "workspaces" / "demo")
 
             finished = store.get_job(job["id"])
             self.assertEqual(finished["status"], "succeeded")
@@ -71,13 +80,13 @@ class OrchestratorTests(unittest.TestCase):
             def fake_run(job_id, stage, _command):
                 store.set_stage(job_id, stage)
                 if stage == "transcript_api":
-                    channel_dir = root / "runs" / job_id / "channels" / "Demo_Channel"
+                    channel_dir = root / "workspaces" / "demo" / "channels" / "Demo_Channel"
                     (channel_dir / "transcripts").mkdir(parents=True)
                 if stage == "blogify":
                     raise StageFailure("blogify exploded")
 
             with patch.object(orchestrator, "_run_command", side_effect=fake_run):
-                orchestrator._run(job["id"], "https://youtube.com/@demo/videos", 1, 1)
+                orchestrator._run(job["id"], "https://youtube.com/@demo/videos", 1, 1, root / "workspaces" / "demo")
 
             failed = store.get_job(job["id"])
             self.assertEqual(failed["status"], "failed")
@@ -95,6 +104,8 @@ class BloggerAuthTests(unittest.TestCase):
         self.assertFalse(status["has_client_secret"])
         self.assertFalse(status["has_blog_id"])
         self.assertFalse(status["has_token"])
+        self.assertFalse(status["has_refresh_token"])
+        self.assertEqual(status["last_action"], "missing_token")
 
 
 if __name__ == "__main__":

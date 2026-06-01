@@ -2,6 +2,7 @@ import json
 import sqlite3
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -20,10 +21,15 @@ class JobStore:
         self._lock = threading.RLock()
         self._init_db()
 
+    @contextmanager
     def _connect(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     def _init_db(self) -> None:
         with self._lock, self._connect() as conn:
@@ -34,6 +40,8 @@ class JobStore:
                     status TEXT NOT NULL,
                     stage TEXT NOT NULL,
                     channel_url TEXT NOT NULL,
+                    workspace_id TEXT,
+                    resumed INTEGER NOT NULL DEFAULT 0,
                     channel TEXT,
                     start_index INTEGER NOT NULL,
                     end_index INTEGER NOT NULL,
@@ -45,24 +53,39 @@ class JobStore:
                 )
                 """
             )
+            existing = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            if "workspace_id" not in existing:
+                conn.execute("ALTER TABLE jobs ADD COLUMN workspace_id TEXT")
+            if "resumed" not in existing:
+                conn.execute("ALTER TABLE jobs ADD COLUMN resumed INTEGER NOT NULL DEFAULT 0")
 
-    def create_job(self, channel_url: str, start: int, end: int, output_dir: str) -> dict:
+    def create_job(
+        self,
+        channel_url: str,
+        start: int,
+        end: int,
+        output_dir: str,
+        workspace_id: str | None = None,
+        resumed: bool = False,
+    ) -> dict:
         job_id = uuid.uuid4().hex
         timestamp = _now()
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO jobs (
-                    id, status, stage, channel_url, channel, start_index, end_index,
+                    id, status, stage, channel_url, workspace_id, resumed, channel, start_index, end_index,
                     created_at, updated_at, logs, error, output_dir
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     "queued",
                     "queued",
                     channel_url,
+                    workspace_id,
+                    1 if resumed else 0,
                     None,
                     start,
                     end,
@@ -136,6 +159,8 @@ class JobStore:
             "status": row["status"],
             "stage": row["stage"],
             "channel_url": row["channel_url"],
+            "workspace_id": row["workspace_id"],
+            "resumed": bool(row["resumed"]),
             "channel": row["channel"],
             "start": row["start_index"],
             "end": row["end_index"],

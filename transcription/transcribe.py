@@ -65,8 +65,8 @@ def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]
     return videos
 
 
-def make_filename(index: int, total: int, title: str) -> str:
-    pad = len(str(total))
+def make_filename(index: int, max_index: int, title: str) -> str:
+    pad = len(str(max_index))
     return f"{str(index).zfill(pad)}_{slugify(title)}.txt"
 
 
@@ -219,9 +219,12 @@ def main():
 
     run_start = time.perf_counter()
 
+    max_index = args.end if args.end is not None else args.start + total - 1
+
     for i, video in enumerate(videos, 1):
         vid_id   = video["id"]
-        filename = make_filename(i, total, video["title"])
+        channel_index = args.start + i - 1
+        filename = make_filename(channel_index, max_index, video["title"])
         out_path = transcript_dir / filename
 
         t0 = time.perf_counter()

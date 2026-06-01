@@ -8,6 +8,7 @@ import {
   Loader2,
   Play,
   Radio,
+  RefreshCw,
   ShieldCheck,
   TerminalSquare,
 } from "lucide-react";
@@ -17,7 +18,10 @@ type AuthStatus = {
   has_client_secret: boolean;
   has_blog_id: boolean;
   has_token: boolean;
+  has_refresh_token: boolean;
   token_valid: boolean;
+  expiry: string | null;
+  last_action: string;
   message: string;
 };
 
@@ -28,6 +32,8 @@ type Job = {
   status: JobStatus;
   stage: string;
   channel_url: string;
+  workspace_id: string | null;
+  resumed: boolean;
   channel: string | null;
   start: number;
   end: number;
@@ -48,7 +54,7 @@ const pipelineSteps: PipelineStep[] = [
   { key: "auth", label: "Blogger auth", detail: "credentials and token" },
   { key: "transcript_api", label: "Transcript API", detail: "caption pull first" },
   { key: "whisper_fallback", label: "Whisper fallback", detail: "yt-dlp audio path" },
-  { key: "blogify", label: "Blogify", detail: "outline and markdown" },
+  { key: "blogify", label: "Blogify", detail: "one-pass markdown" },
   { key: "blogger_drafts", label: "Blogger drafts", detail: "HTML draft insert" },
 ];
 
@@ -136,11 +142,25 @@ export function App() {
     };
   }, [jobId]);
 
-  async function connectBlogger() {
+  async function checkToken() {
+    setAuthBusy(true);
+    setNotice("Checking saved Blogger token.");
+    try {
+      const nextAuth = await api<AuthStatus>("/api/auth/blogger/refresh", { method: "POST" });
+      setAuth(nextAuth);
+      setNotice(nextAuth.message);
+    } catch (error) {
+      setNotice(errorMessage(error));
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function reconnectBlogger() {
     setAuthBusy(true);
     setNotice("Opening local Google authorization flow.");
     try {
-      const nextAuth = await api<AuthStatus>("/api/auth/blogger/connect", { method: "POST" });
+      const nextAuth = await api<AuthStatus>("/api/auth/blogger/reconnect", { method: "POST" });
       setAuth(nextAuth);
       setNotice(nextAuth.message);
     } catch (error) {
@@ -191,7 +211,7 @@ export function App() {
           <div className="section-kicker">Intake bay</div>
           <h1>Turn channel range into Blogger drafts.</h1>
           <p className="intro">
-            Authentication is checked before the first transcript request. Every run writes into its own isolated workspace.
+            Authentication is checked before the first transcript request. Repeated channel runs resume from the same workspace.
           </p>
 
           <label className="field">
@@ -219,9 +239,13 @@ export function App() {
           </div>
 
           <div className="button-row">
-            <button className="secondary" type="button" onClick={connectBlogger} disabled={authBusy || running}>
+            <button className="secondary" type="button" onClick={checkToken} disabled={authBusy || running}>
+              {authBusy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+              <span>Check token</span>
+            </button>
+            <button className="secondary" type="button" onClick={reconnectBlogger} disabled={authBusy || running}>
               {authBusy ? <Loader2 className="spin" size={18} /> : <KeyRound size={18} />}
-              <span>{auth?.ready ? "Refresh auth" : "Connect Blogger"}</span>
+              <span>{auth?.has_token ? "Reconnect Blogger" : "Connect Blogger"}</span>
             </button>
             <button className="primary" type="submit" disabled={!canStart}>
               {running ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
@@ -234,6 +258,7 @@ export function App() {
             <StatusFlag label="BLOGGER_BLOG_ID" ready={Boolean(auth?.has_blog_id)} />
             <StatusFlag label="token.json" ready={Boolean(auth?.has_token)} />
             <StatusFlag label="token valid" ready={Boolean(auth?.token_valid)} />
+            <StatusFlag label="refresh token" ready={Boolean(auth?.has_refresh_token)} />
           </div>
         </form>
 
@@ -267,6 +292,7 @@ export function App() {
         <div className="job-meta">
           <span>Range: {job ? `${job.start}-${job.end}` : `${start || "-"}-${end || "-"}`}</span>
           <span>Stage: {job?.stage || (auth?.ready ? "ready" : "auth")}</span>
+          <span>Workspace: {job?.workspace_id ? `${job.workspace_id}${job.resumed ? " (resumed)" : ""}` : "waiting"}</span>
           <span>Output: {job?.output_dir || "waiting"}</span>
         </div>
 

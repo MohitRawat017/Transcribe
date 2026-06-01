@@ -17,6 +17,6 @@ send_telegram: false    # upload transcripts to Telegram channel (requires env v
 # blog generation
 llm:
   base_url: "https://api.groq.com/openai/v1"   # Groq (OpenAI-compatible); key in .env as LLM_API_KEY
-  api_key: os.getenv("GROQ_API_KEY")           # fallback only; ignored when LLM_API_KEY is set
+  api_key_env: "GROQ_API_KEY"           
   model: "llama-3.3-70b-versatile"              # Groq, 128k context
   temperature: 0.7

@@ -1,0 +1,101 @@
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from backend.jobs import JobStore
+from backend.orchestrator import ActiveJobError, PipelineOrchestrator, StageFailure
+from blog.auth import auth_status
+
+
+class JobStoreTests(unittest.TestCase):
+    def test_create_and_update_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp) / "jobs.sqlite")
+            job = store.create_job("https://youtube.com/@demo/videos", 1, 2, str(Path(tmp) / "runs"))
+
+            self.assertEqual(job["status"], "queued")
+            self.assertEqual(job["stage"], "queued")
+
+            store.set_running(job["id"])
+            store.append_log(job["id"], "hello")
+            updated = store.get_job(job["id"])
+
+            self.assertEqual(updated["status"], "running")
+            self.assertEqual(updated["stage"], "transcript_api")
+            self.assertEqual(updated["logs"], ["hello"])
+
+    def test_active_job_blocks_new_submissions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp) / "jobs.sqlite")
+            store.create_job("https://youtube.com/@demo/videos", 1, 1, str(Path(tmp) / "runs"))
+            orchestrator = PipelineOrchestrator(tmp, store)
+
+            with self.assertRaises(ActiveJobError):
+                orchestrator.submit("https://youtube.com/@other/videos", 1, 1)
+
+
+class OrchestratorTests(unittest.TestCase):
+    def test_successful_pipeline_uses_isolated_channel_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = JobStore(root / "jobs.sqlite")
+            orchestrator = PipelineOrchestrator(root, store)
+            job = store.create_job("https://youtube.com/@demo/videos", 1, 1, str(root / "runs" / "job"))
+            stages = []
+
+            def fake_run(job_id, stage, _command):
+                store.set_stage(job_id, stage)
+                store.append_log(job_id, f"stage {stage}")
+                stages.append(stage)
+                if stage == "transcript_api":
+                    channel_dir = root / "runs" / job_id / "channels" / "Demo_Channel"
+                    (channel_dir / "transcripts").mkdir(parents=True)
+
+            with patch.object(orchestrator, "_run_command", side_effect=fake_run):
+                orchestrator._run(job["id"], "https://youtube.com/@demo/videos", 1, 1)
+
+            finished = store.get_job(job["id"])
+            self.assertEqual(finished["status"], "succeeded")
+            self.assertEqual(finished["channel"], "Demo_Channel")
+            self.assertEqual(stages, ["transcript_api", "blogify", "blogger_drafts"])
+
+    def test_failed_stage_records_error_and_stage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = JobStore(root / "jobs.sqlite")
+            orchestrator = PipelineOrchestrator(root, store)
+            job = store.create_job("https://youtube.com/@demo/videos", 1, 1, str(root / "runs" / "job"))
+
+            def fake_run(job_id, stage, _command):
+                store.set_stage(job_id, stage)
+                if stage == "transcript_api":
+                    channel_dir = root / "runs" / job_id / "channels" / "Demo_Channel"
+                    (channel_dir / "transcripts").mkdir(parents=True)
+                if stage == "blogify":
+                    raise StageFailure("blogify exploded")
+
+            with patch.object(orchestrator, "_run_command", side_effect=fake_run):
+                orchestrator._run(job["id"], "https://youtube.com/@demo/videos", 1, 1)
+
+            failed = store.get_job(job["id"])
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["stage"], "blogify")
+            self.assertIn("blogify exploded", failed["error"])
+
+
+class BloggerAuthTests(unittest.TestCase):
+    def test_auth_status_reports_missing_local_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {}, clear=True):
+                status = auth_status(Path(tmp), refresh=False)
+
+        self.assertFalse(status["ready"])
+        self.assertFalse(status["has_client_secret"])
+        self.assertFalse(status["has_blog_id"])
+        self.assertFalse(status["has_token"])
+
+
+if __name__ == "__main__":
+    unittest.main()

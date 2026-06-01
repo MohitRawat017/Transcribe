@@ -35,6 +35,24 @@ pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 Requires `ffmpeg` for audio conversion.
 
+## Local Web App
+
+The web app wraps the CLI pipeline with a local FastAPI backend and React frontend.
+Blogger credentials are checked before any transcript work starts.
+
+```bash
+pip install -r requirements-web.txt
+cd frontend
+npm install
+npm run build
+cd ..
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000`, connect Blogger if needed, paste a channel URL, and
+choose a required start/end range. Each run writes to `runs/<job_id>/` and publishes
+drafts only.
+
 ## Stage 1 — Transcripts
 
 ```bash

@@ -83,7 +83,7 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config()["llm"]
-    client = OpenAI(base_url=cfg["base_url"], api_key=os.environ.get("LLM_API_KEY") or cfg["api_key"])
+    client = OpenAI(base_url=cfg["base_url"], api_key=os.environ.get("LLM_API_KEY") or os.getenv(cfg.get("api_key_env", "GROQ_API_KEY")))
 
     transcript_dir = Path(args.base_dir) / args.channel / "transcripts"
     blog_dir = Path(args.base_dir) / args.channel / "blogs"

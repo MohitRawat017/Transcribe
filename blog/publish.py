@@ -1,31 +1,17 @@
 import argparse
-import os
 import time
 import markdown
 from pathlib import Path
 from dotenv import load_dotenv
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+import sys
+
+if __package__ in {None, ""}:
+    sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from blog.auth import get_blog_id, get_service
 
 load_dotenv()
-SCOPES = ["https://www.googleapis.com/auth/blogger"]
-
-
-def get_service():
-    creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("client_secret.json", SCOPES)
-            creds = flow.run_local_server(port=0)
-        Path("token.json").write_text(creds.to_json())
-    return build("blogger", "v3", credentials=creds)
 
 
 def md_to_post(text: str):
@@ -47,6 +33,22 @@ def insert_with_retry(service, blog_id, body, is_draft, retries=5):
                 raise
 
 
+def publish_blogs(channel: str, base_dir: str = "./channels", draft: bool = False) -> int:
+    service = get_service(require_blog_id=True)
+    blog_id = get_blog_id()
+
+    blog_dir = Path(base_dir) / channel / "blogs"
+    files = sorted(blog_dir.glob("*.md"))
+    print(f"Found {len(files)} posts.")
+    for i, path in enumerate(files, 1):
+        title, html = md_to_post(path.read_text(encoding="utf-8"))
+        print(f"[{i}/{len(files)}] Publishing: {title}")
+        insert_with_retry(service, blog_id, {"title": title, "content": html}, draft)
+        print("  Done")
+        time.sleep(2)  # be gentle with Blogger's write rate limit
+    return len(files)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Publish blog posts to Blogger.")
     parser.add_argument("channel", nargs="?", help="Channel folder name under ./channels/")
@@ -55,7 +57,7 @@ def main():
     parser.add_argument("--list-blogs", action="store_true", help="List your blogs and their IDs, then exit")
     args = parser.parse_args()
 
-    service = get_service()
+    service = get_service(require_blog_id=False)
 
     if args.list_blogs:
         blogs = service.blogs().listByUser(userId="self").execute().get("items", [])
@@ -65,17 +67,7 @@ def main():
 
     if not args.channel:
         parser.error("channel is required unless --list-blogs is used")
-    blog_id = os.environ["BLOGGER_BLOG_ID"]
-
-    blog_dir = Path(args.base_dir) / args.channel / "blogs"
-    files = sorted(blog_dir.glob("*.md"))
-    print(f"Found {len(files)} posts.")
-    for i, path in enumerate(files, 1):
-        title, html = md_to_post(path.read_text(encoding="utf-8"))
-        print(f"[{i}/{len(files)}] Publishing: {title}")
-        insert_with_retry(service, blog_id, {"title": title, "content": html}, args.draft)
-        print("  Done")
-        time.sleep(2)  # be gentle with Blogger's write rate limit
+    publish_blogs(args.channel, args.base_dir, args.draft)
 
 
 if __name__ == "__main__":

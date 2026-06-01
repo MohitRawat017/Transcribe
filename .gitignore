@@ -19,3 +19,12 @@ token.json
 
 claude.md 
 plan/
+data/
+runs/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+AGENTS.md
+skills/
+

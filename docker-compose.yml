@@ -1,21 +1,28 @@
 services:
-  app:
-    build: .
-    env_file: .env                     # LLM_API_KEY, BLOGGER_BLOG_ID
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DISABLE_BROWSER_OAUTH: "1"
+      HF_HOME: /models/huggingface
+      YTDLP_COOKIE_PATH: /app/cookies/cookies.txt
+      YTDLP_USER_AGENT: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0"
+      YTDLP_USE_COOKIES: auto
+      YTDLP_SLEEP_MIN: "3"
+      YTDLP_SLEEP_MAX: "6"
+    ports:
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ./channels:/app/channels       # transcripts in, blogs out
-      - ./token.json:/app/token.json:ro
+      - ./workspaces:/app/workspaces
+      - ./data:/app/data
+      - ./token.json:/app/token.json
       - ./client_secret.json:/app/client_secret.json:ro
-
-  # --- optional: local model on a GPU host (run with `--profile gpu`) ---
-  vllm:
-    image: vllm/vllm-openai:v0.6.3      # pin a real version
-    profiles: ["gpu"]
-    command: ["--model", "Qwen/Qwen2.5-7B-Instruct"]
-    ipc: host
-    ports: ["8000:8000"]
-    volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
+      - ./cookies:/app/cookies:ro
+      - hf-cache:/models/huggingface
     deploy:
       resources:
         reservations:
@@ -23,3 +30,6 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+volumes:
+  hf-cache:

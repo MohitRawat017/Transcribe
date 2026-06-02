@@ -16,6 +16,8 @@ terminal_output.md
 *.md.bak
 client_secret.json
 token.json
+cookies.txt
+cookies/
 
 claude.md 
 plan/
@@ -25,6 +27,9 @@ workspaces/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
 
 AGENTS.md
 skills/

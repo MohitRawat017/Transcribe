@@ -106,6 +106,26 @@ class JobStore:
             ).fetchone()
             return row is not None
 
+    def fail_active_jobs_on_startup(self, message: str = "Server restarted before this job completed.") -> int:
+        timestamp = _now()
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, logs FROM jobs WHERE status IN (?, ?)",
+                ACTIVE_STATUSES,
+            ).fetchall()
+            for row in rows:
+                logs = json.loads(row["logs"])
+                logs.append(message)
+                conn.execute(
+                    """
+                    UPDATE jobs
+                    SET status = ?, stage = ?, logs = ?, error = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    ("failed", "failed", json.dumps(logs), message, timestamp, row["id"]),
+                )
+            return len(rows)
+
     def set_running(self, job_id: str) -> None:
         self._update(job_id, status="running", stage="transcript_api")
 

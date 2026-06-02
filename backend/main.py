@@ -22,6 +22,7 @@ app.add_middleware(
 )
 
 store = JobStore(REPO_ROOT / "data" / "jobs.sqlite")
+store.fail_active_jobs_on_startup()
 orchestrator = PipelineOrchestrator(REPO_ROOT, store)
 
 
@@ -38,6 +39,11 @@ def blogger_status():
 
 @app.post("/api/auth/blogger/connect")
 def blogger_connect():
+    if blogger_auth.oauth_disabled(REPO_ROOT):
+        raise HTTPException(
+            status_code=409,
+            detail="Browser OAuth is disabled in production. Upload token.json and use Check token.",
+        )
     try:
         return blogger_auth.connect(REPO_ROOT)
     except Exception as exc:
@@ -54,6 +60,11 @@ def blogger_refresh():
 
 @app.post("/api/auth/blogger/reconnect")
 def blogger_reconnect():
+    if blogger_auth.oauth_disabled(REPO_ROOT):
+        raise HTTPException(
+            status_code=409,
+            detail="Browser OAuth is disabled in production. Reconnect locally, then upload token.json.",
+        )
     try:
         return blogger_auth.reconnect(REPO_ROOT)
     except Exception as exc:

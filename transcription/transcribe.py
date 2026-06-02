@@ -2,17 +2,33 @@ import argparse
 import gc
 import io
 import os
-import re
 import sys
 import time
 import yaml
 import torch
-import yt_dlp
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
+try:
+    from transcription.youtube_access import (
+        YoutubeAccessError,
+        deno_available,
+        download_with_cookie_retry,
+        extract_info_with_cookie_retry,
+        normalize_channel_url,
+        slugify,
+    )
+except ModuleNotFoundError:
+    from youtube_access import (
+        YoutubeAccessError,
+        deno_available,
+        download_with_cookie_retry,
+        extract_info_with_cookie_retry,
+        normalize_channel_url,
+        slugify,
+    )
 
 load_dotenv()
 
@@ -27,21 +43,20 @@ def load_config(path: str = "config.yaml") -> dict:
     return {}
 
 
-def slugify(name: str) -> str:
-    return re.sub(r"[^\w\-]", "_", name).strip("_")
-
-
 def get_channel_name(channel_url: str) -> str:
-    ydl_opts = {"quiet": True, "extract_flat": True, "playlistend": 1}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(channel_url, download=False)
+    info, mode = extract_info_with_cookie_retry(
+        normalize_channel_url(channel_url),
+        {"extract_flat": "in_playlist", "yes_playlist": True, "playlistend": 1},
+        "channel metadata",
+    )
+    print(f"Channel metadata resolved via {mode}.")
     return info.get("channel") or info.get("uploader") or "unknown_channel"
 
 
 def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]:
     ydl_opts = {
-        "quiet": True,
-        "extract_flat": True,
+        "extract_flat": "in_playlist",
+        "yes_playlist": True,
         "playliststart": start,
         "ignoreerrors": True,
     }
@@ -49,8 +64,7 @@ def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]
         ydl_opts["playlistend"] = end
 
     print(f"Scanning channel (videos {start}-{'all' if end is None else end})...")
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(channel_url, download=False)
+    info, mode = extract_info_with_cookie_retry(normalize_channel_url(channel_url), ydl_opts, "channel listing")
 
     if not info or "entries" not in info:
         print("Error: could not fetch channel info. Check the URL.")
@@ -61,7 +75,7 @@ def fetch_video_ids(channel_url: str, start: int, end: int | None) -> list[dict]
         for e in info["entries"]
         if e and e.get("id") and not e["id"].startswith("UC")
     ]
-    print(f"Found {len(videos)} videos.\n")
+    print(f"Found {len(videos)} videos via {mode}.\n")
     return videos
 
 
@@ -80,12 +94,14 @@ def try_api_transcript(vid_id: str, languages: list[str]) -> list | None:
         return None
 
 
-def download_audio(vid_id: str, audio_dir: str) -> str | None:
+def download_audio(vid_id: str, audio_dir: str) -> tuple[str, str] | None:
+    if not deno_available():
+        print("  Deno is not available on PATH. Install Deno so yt-dlp can run YouTube EJS challenges.")
+        return None
+
     ydl_opts = {
         "format": "bestaudio/best",
         "outtmpl": os.path.join(audio_dir, "%(id)s.%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "opus",
@@ -94,16 +110,16 @@ def download_audio(vid_id: str, audio_dir: str) -> str | None:
         "postprocessor_args": ["-ac", "1"],
     }
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([f"https://www.youtube.com/watch?v={vid_id}"])
-    except yt_dlp.utils.DownloadError as e:
+        mode = download_with_cookie_retry([f"https://www.youtube.com/watch?v={vid_id}"], ydl_opts, "audio download")
+    except YoutubeAccessError as e:
         print(f"  Audio download failed: {e}")
         return None
 
     for ext in ("opus", "ogg", "webm", "m4a", "mp3"):
         candidate = os.path.join(audio_dir, f"{vid_id}.{ext}")
         if os.path.exists(candidate):
-            return candidate
+            print(f"  Audio download succeeded via {mode}.")
+            return candidate, mode
 
     print(f"  Audio file not found after download for {vid_id}")
     return None
@@ -252,13 +268,14 @@ def main():
             whisper_model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
 
         audio_dir.mkdir(parents=True, exist_ok=True)
-        audio_path = download_audio(vid_id, str(audio_dir))
+        audio_result = download_audio(vid_id, str(audio_dir))
 
-        if audio_path is None:
+        if audio_result is None:
             print("  Skipping: could not download audio.\n")
             stats["failed"] += 1
             continue
 
+        audio_path, audio_source = audio_result
         segments = transcribe_audio(audio_path, whisper_model, args.languages[0])
 
         if not args.keep_audio and os.path.exists(audio_path):
@@ -269,7 +286,7 @@ def main():
             stats["failed"] += 1
             continue
 
-        content = build_transcript_text(video["title"], segments, "whisper", args.timestamps)
+        content = build_transcript_text(video["title"], segments, f"whisper/{audio_source}", args.timestamps)
         if args.save_local:
             save_transcript_locally(out_path, content)
         if args.send_telegram:

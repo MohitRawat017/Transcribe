@@ -14,6 +14,10 @@ class BloggerAuthError(RuntimeError):
     pass
 
 
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _root(root: str | Path | None = None) -> Path:
     return Path(root or ".").resolve()
 
@@ -24,6 +28,12 @@ def _paths(root: Path) -> tuple[Path, Path]:
 
 def _load_env(root: Path) -> None:
     load_dotenv(root / ".env")
+
+
+def browser_oauth_disabled(root: str | Path | None = None) -> bool:
+    repo_root = _root(root)
+    _load_env(repo_root)
+    return _truthy(os.environ.get("DISABLE_BROWSER_OAUTH"))
 
 
 def get_blog_id(root: str | Path | None = None) -> str:
@@ -113,6 +123,11 @@ def get_service(
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         elif interactive:
+            if browser_oauth_disabled(repo_root):
+                raise BloggerAuthError(
+                    "Browser OAuth is disabled in production. Generate token.json locally, upload it to the server, "
+                    "then use Check token."
+                )
             if not client_secret_path.exists():
                 raise BloggerAuthError("client_secret.json is missing.")
             flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), SCOPES)

@@ -1,13 +1,10 @@
-import hashlib
-import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import yt_dlp
-
 from backend.jobs import JobStore
+from transcription.youtube_access import YoutubeAccessError, resolve_channel_workspace
 
 
 class ActiveJobError(RuntimeError):
@@ -16,24 +13,6 @@ class ActiveJobError(RuntimeError):
 
 class StageFailure(RuntimeError):
     pass
-
-
-def slugify(name: str) -> str:
-    return re.sub(r"[^\w\-]", "_", name).strip("_") or "unknown_channel"
-
-
-def resolve_channel_workspace(channel_url: str) -> dict:
-    ydl_opts = {"quiet": True, "extract_flat": True, "playlistend": 1, "ignoreerrors": True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(channel_url, download=False)
-
-    if not info:
-        raise StageFailure("Could not resolve channel metadata. Check the URL.")
-
-    channel_name = slugify(info.get("channel") or info.get("uploader") or info.get("title") or "unknown_channel")
-    channel_id = info.get("channel_id") or info.get("uploader_id")
-    workspace_id = slugify(channel_id) if channel_id else hashlib.sha1(channel_url.encode("utf-8")).hexdigest()[:16]
-    return {"workspace_id": workspace_id, "channel": channel_name}
 
 
 class PipelineOrchestrator:
@@ -46,11 +25,15 @@ class PipelineOrchestrator:
         if self.store.has_active_job():
             raise ActiveJobError("Another job is already running.")
 
-        workspace = resolve_channel_workspace(channel_url)
+        try:
+            workspace = resolve_channel_workspace(channel_url)
+        except YoutubeAccessError as exc:
+            raise StageFailure(str(exc)) from exc
+
         workspace_dir = self.repo_root / "workspaces" / workspace["workspace_id"]
         resumed = workspace_dir.exists()
         job = self.store.create_job(
-            channel_url,
+            workspace["normalized_url"],
             start,
             end,
             str(workspace_dir),
@@ -58,7 +41,7 @@ class PipelineOrchestrator:
             resumed=resumed,
         )
         self.store.set_channel(job["id"], workspace["channel"])
-        self.executor.submit(self._run, job["id"], channel_url, start, end, workspace_dir)
+        self.executor.submit(self._run, job["id"], workspace["normalized_url"], start, end, workspace_dir)
         return self.store.get_job(job["id"])
 
     def _run(self, job_id: str, channel_url: str, start: int, end: int, workspace_dir: Path) -> None:

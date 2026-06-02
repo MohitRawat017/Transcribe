@@ -9,6 +9,8 @@ skills
 frontend/node_modules
 frontend/dist
 frontend/*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
 .git
 __pycache__
 .env
@@ -18,4 +20,7 @@ token.json
 client_secret.json
 plan
 terminal_output.md
+AGENTS.md
+claude.md
+.python-version
 *.md.bak

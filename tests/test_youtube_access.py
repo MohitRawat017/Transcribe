@@ -16,6 +16,7 @@ from transcription.youtube_access import (
     classify_yt_dlp_failure,
     download_with_cookie_retry,
     normalize_channel_url,
+    resolve_channel_workspace,
 )
 
 
@@ -111,6 +112,21 @@ class YoutubeAccessTests(unittest.TestCase):
                         download_with_cookie_retry(["https://www.youtube.com/watch?v=test"], {}, "audio download")
 
             self.assertEqual(len(calls), 1)
+
+    def test_workspace_resolver_uses_playlist_flat_extraction(self):
+        with patch(
+            "transcription.youtube_access.extract_info_with_cookie_retry",
+            return_value=({"channel": "Demo Channel", "channel_id": "UC123"}, "yt-dlp:no-cookies"),
+        ) as fake_extract:
+            workspace = resolve_channel_workspace("https://www.youtube.com/@demo")
+
+        called_url, opts, label = fake_extract.call_args.args
+        self.assertEqual(called_url, "https://www.youtube.com/@demo/videos")
+        self.assertEqual(opts["extract_flat"], "in_playlist")
+        self.assertTrue(opts["yes_playlist"])
+        self.assertEqual(opts["playlistend"], 1)
+        self.assertEqual(label, "channel metadata")
+        self.assertEqual(workspace["workspace_id"], "UC123")
 
 
 if __name__ == "__main__":

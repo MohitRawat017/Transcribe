@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from backend.jobs import JobStore
 from backend.orchestrator import ActiveJobError, PipelineOrchestrator, StageFailure
-from blog.auth import auth_status
+from blog.auth import BloggerAuthError, auth_status, browser_oauth_disabled, get_service
 
 
 class JobStoreTests(unittest.TestCase):
@@ -43,6 +43,21 @@ class JobStoreTests(unittest.TestCase):
 
             with self.assertRaises(ActiveJobError):
                 orchestrator.submit("https://youtube.com/@other/videos", 1, 1)
+
+    def test_startup_recovery_marks_active_jobs_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = JobStore(Path(tmp) / "jobs.sqlite")
+            job = store.create_job("https://youtube.com/@demo/videos", 1, 1, str(Path(tmp) / "workspaces" / "demo"))
+
+            recovered = store.fail_active_jobs_on_startup("interrupted")
+            updated = store.get_job(job["id"])
+
+            self.assertEqual(recovered, 1)
+            self.assertFalse(store.has_active_job())
+            self.assertEqual(updated["status"], "failed")
+            self.assertEqual(updated["stage"], "failed")
+            self.assertEqual(updated["error"], "interrupted")
+            self.assertIn("interrupted", updated["logs"])
 
 
 class OrchestratorTests(unittest.TestCase):
@@ -106,6 +121,13 @@ class BloggerAuthTests(unittest.TestCase):
         self.assertFalse(status["has_token"])
         self.assertFalse(status["has_refresh_token"])
         self.assertEqual(status["last_action"], "missing_token")
+
+    def test_browser_oauth_can_be_disabled_for_production(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"DISABLE_BROWSER_OAUTH": "1"}, clear=True):
+                self.assertTrue(browser_oauth_disabled(Path(tmp)))
+                with self.assertRaisesRegex(BloggerAuthError, "Browser OAuth is disabled"):
+                    get_service(Path(tmp), interactive=True)
 
 
 if __name__ == "__main__":
